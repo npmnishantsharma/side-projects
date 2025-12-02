@@ -43,6 +43,26 @@
             opacity: 0.6;
         }
 
+        /* --- Tooltip --- */
+        #tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.85);
+            color: #00ffff;
+            padding: 8px 12px;
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            border-radius: 4px;
+            pointer-events: none; /* Let mouse pass through */
+            display: none;
+            font-size: 14px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            z-index: 100;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.2);
+            backdrop-filter: blur(4px);
+            transform: translate(15px, 15px); /* Offset from cursor */
+        }
+
         /* --- Navigation Styles --- */
         #planet-nav {
             position: absolute;
@@ -82,7 +102,7 @@
             color: #fff;
             text-shadow: 0 0 8px rgba(0, 255, 255, 0.8);
         }
-        .tooltip {
+        .tooltip-nav {
             font-size: 0.7rem;
             color: #aaa;
             text-align: right;
@@ -95,14 +115,17 @@
 
     <div id="ui">
         <h1>Particle Solar System</h1>
-        <p>Drag to Rotate &bull; Scroll to Zoom</p>
+        <p>Hover to Focus &bull; Double-click Overview for Supernova</p>
         <div class="legend">Not to scale (distances compressed for visibility)</div>
     </div>
 
+    <!-- Tooltip Element -->
+    <div id="tooltip">Planet Name</div>
+
     <!-- Navigation Container -->
     <div id="planet-nav">
-        <div class="tooltip">Double-click planet to destroy</div>
-        <div class="tooltip">Double-click Overview for Supernova</div>
+        <div class="tooltip-nav">Double-click planet to destroy</div>
+        <div class="tooltip-nav">Long hover to focus</div>
     </div>
 
     <script type="module">
@@ -132,6 +155,12 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         document.body.appendChild(renderer.domElement);
+
+        // --- Raycaster for Hover ---
+        const raycaster = new THREE.Raycaster();
+        raycaster.params.Points.threshold = 10; // Tolerance for hitting particles
+        const mouse = new THREE.Vector2();
+        const tooltip = document.getElementById('tooltip');
 
         // --- Texture ---
         function getSparkleTexture() {
@@ -234,6 +263,7 @@
             
             mesh.userData = {
                 id: celestialBodies.length, // Store index
+                name: config.name,
                 distance: config.distance,
                 speed: config.speed,
                 angle: angle,
@@ -244,9 +274,11 @@
                 explosionTime: 0,
                 velocities: [], 
                 bigBangVelocities: [],
-                ringOffset: [], // For protoplanetary disk
+                ringOffset: [], 
                 radius: config.radius,
-                isSun: config.distance === 0
+                isSun: config.distance === 0,
+                targetOpacity: 1.0,  // For fading in/out
+                currentOpacity: 1.0
             };
 
             mesh.position.x = Math.cos(angle) * config.distance;
@@ -279,12 +311,18 @@
         let camPhi = Math.PI / 2;   
         let focusedBodyIndex = -1;
 
-        // --- Big Bang / Supernova State Machine ---
+        // Big Bang State
         let isBigBang = false;
-        let bbPhase = 'idle'; // expansion, supernova, nebula, sun_reform, disk_formation, planet_reform
+        let bbPhase = 'idle';
         let bbTime = 0;
         let sunScale = 1;
-        let planetReformIndex = 1; // Start after sun
+        let planetReformIndex = 1;
+
+        // Hover State
+        let hoverStartTime = 0;
+        let hoveredIndex = -1;
+        let isLongHover = false;
+        const LONG_HOVER_THRESHOLD = 1000; // 1 second
 
         // --- Logic: Focus, Explode, Big Bang ---
         
@@ -293,20 +331,37 @@
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
             if(btnElement) btnElement.classList.add('active');
 
+            // Reset visibilities
+            celestialBodies.forEach(b => b.userData.targetOpacity = 1.0);
+
             if (index === -1) {
                 targetRadius = 600;
+                isLongHover = false;
             } else {
-                const planetRadius = PLANET_CONFIG[index].radius;
-                targetRadius = Math.max(planetRadius * 4, 30);
+                // Determine zoom based on Long Hover or Click
+                // If triggered by long hover, we want "Big Like Sun"
+                if (isLongHover) {
+                    // Approximate zoom to fill screen similar to Sun
+                    const planetRadius = PLANET_CONFIG[index].radius;
+                    targetRadius = planetRadius * 3.5; 
+                    
+                    // Hide others
+                    celestialBodies.forEach((b, idx) => {
+                        if (idx !== index) b.userData.targetOpacity = 0.05; // Dim others
+                    });
+                } else {
+                    // Normal Click Focus
+                    const planetRadius = PLANET_CONFIG[index].radius;
+                    targetRadius = Math.max(planetRadius * 4, 30);
+                }
             }
         }
 
         function explodeAndRebuild(index, btnElement) {
             if (index === -1 || isBigBang) return; 
+            isLongHover = false; // Reset hover focus if exploding
             focusOnBody(index, btnElement);
             const planetRadius = PLANET_CONFIG[index].radius;
-            
-            // Adjusted zoom: Close enough to feel the blast, far enough to see debris
             targetRadius = Math.max(planetRadius * 10, 80); 
 
             const body = celestialBodies[index];
@@ -335,38 +390,27 @@
             sunScale = 1;
             planetReformIndex = 1;
             
-            // Focus on Overview
             focusOnBody(-1, overviewBtn);
-            
-            // Adjusted zoom: Fits the whole system comfortably without being too distant
             targetRadius = 950; 
 
-            // Prepare bodies
             celestialBodies.forEach(body => {
-                body.userData.animationState = 'idle'; // Reset local anims
-                
-                // Calculate "Ring Offset" for future disk formation
-                // We want to calculate a position in a flat ring AROUND THE SUN (0,0,0)
-                // But the particles are local to the planet mesh.
-                // We will handle the "ring" visual by overriding world positions later, 
-                // or by clever local positioning.
-                // Strategy: During ring phase, we drift particles to random spot in a disk.
+                body.userData.animationState = 'idle';
+                body.userData.targetOpacity = 1.0; // Show all
                 
                 body.userData.ringOffset = [];
                 const count = body.geometry.attributes.position.count;
                 for(let i=0; i<count; i++) {
-                    const r = 100 + Math.random() * 300; // Ring radius
+                    const r = 100 + Math.random() * 300; 
                     const theta = Math.random() * Math.PI * 2;
-                    const y = (Math.random() - 0.5) * 10; // Flat disk
+                    const y = (Math.random() - 0.5) * 10; 
                     body.userData.ringOffset.push(r * Math.cos(theta), y, r * Math.sin(theta));
                 }
 
-                // Prepare Explosion Velocities
                 body.userData.bigBangVelocities = [];
                 for(let i=0; i<count; i++) {
                     const theta = Math.random() * Math.PI * 2;
                     const phi = Math.acos((Math.random() * 2) - 1);
-                    const speed = 10 + Math.random() * 40; // FAST explosion
+                    const speed = 10 + Math.random() * 40; 
                     const vx = speed * Math.sin(phi) * Math.cos(theta);
                     const vy = speed * Math.sin(phi) * Math.sin(theta);
                     const vz = speed * Math.cos(phi);
@@ -381,7 +425,7 @@
         const overviewBtn = document.createElement('button');
         overviewBtn.className = 'nav-btn active';
         overviewBtn.innerText = 'Overview';
-        overviewBtn.onclick = () => focusOnBody(-1, overviewBtn);
+        overviewBtn.onclick = () => { isLongHover = false; focusOnBody(-1, overviewBtn); };
         overviewBtn.ondblclick = () => triggerBigBang();
         navContainer.appendChild(overviewBtn);
 
@@ -389,7 +433,7 @@
             const btn = document.createElement('button');
             btn.className = 'nav-btn';
             btn.innerText = planet.name;
-            btn.onclick = () => focusOnBody(index, btn);
+            btn.onclick = () => { isLongHover = false; focusOnBody(index, btn); };
             btn.ondblclick = () => explodeAndRebuild(index, btn);
             navContainer.appendChild(btn);
         });
@@ -419,6 +463,17 @@
                 previousMousePosition = { x, y };
             }
         };
+        
+        // Mouse Move for Raycaster (Tooltip)
+        document.addEventListener('mousemove', (event) => {
+            // Normalize mouse position for Raycaster (-1 to +1)
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            // Move tooltip
+            tooltip.style.left = event.clientX + 'px';
+            tooltip.style.top = event.clientY + 'px';
+        });
 
         const handleEnd = () => { isDragging = false; };
 
@@ -431,6 +486,7 @@
 
         document.addEventListener('wheel', (e) => {
             e.preventDefault();
+            isLongHover = false; // Scroll breaks auto-focus
             targetRadius += e.deltaY * 0.5;
             targetRadius = Math.max(15, Math.min(1500, targetRadius)); 
         }, { passive: false });
@@ -449,233 +505,152 @@
             requestAnimationFrame(animate);
             const time = clock.getElapsedTime();
 
-            if (isBigBang) {
-                // --- SUPERNOVA SEQUENCE ---
-                bbTime += 0.016;
+            // --- Raycasting (Hover) Logic ---
+            if (!isDragging && !isBigBang) {
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(celestialBodies);
 
+                if (intersects.length > 0) {
+                    const hitIndex = intersects[0].object.userData.id;
+                    const planetName = intersects[0].object.userData.name;
+
+                    // Show Tooltip
+                    tooltip.style.display = 'block';
+                    tooltip.innerText = planetName;
+
+                    if (hoveredIndex !== hitIndex) {
+                        // New Hover
+                        hoveredIndex = hitIndex;
+                        hoverStartTime = performance.now();
+                    } else {
+                        // Continued Hover
+                        if (!isLongHover && (performance.now() - hoverStartTime > LONG_HOVER_THRESHOLD)) {
+                            // Trigger Long Hover Focus
+                            isLongHover = true;
+                            focusOnBody(hitIndex, null); // Null because no button clicked
+                        }
+                    }
+                } else {
+                    // No Hit
+                    tooltip.style.display = 'none';
+                    if (isLongHover) {
+                        // Mouse left planet after long hover -> Restore
+                        isLongHover = false;
+                        hoveredIndex = -1;
+                        focusOnBody(-1, overviewBtn); // Restore to overview
+                    } else {
+                        hoveredIndex = -1;
+                    }
+                }
+            } else {
+                tooltip.style.display = 'none';
+            }
+
+            if (isBigBang) {
+                // ... (Supernova Logic - same as before) ...
+                bbTime += 0.016;
                 if (bbPhase === 'expansion') {
-                    // Phase 1: Sun expands and engulfs
-                    sunScale += 0.05; // Growth speed
-                    
+                    sunScale += 0.05; 
                     const sunBody = celestialBodies[0];
                     const sunRadiusCurrent = PLANET_CONFIG[0].radius * sunScale;
-                    
-                    // Update Sun Size visual
-                    // We modify particle positions to simulate scale to avoid scaling children incorrectly if any
                     const positions = sunBody.geometry.attributes.position.array;
                     const originals = sunBody.userData.originalPositions;
                     const colorsArr = sunBody.geometry.attributes.color.array;
-                    
-                    for(let i=0; i<positions.length; i++) {
-                        positions[i] = originals[i] * sunScale;
-                    }
-                    // Turn sun angry red
-                    for(let i=0; i<colorsArr.length; i+=3) {
-                         colorsArr[i] = 1.0; 
-                         colorsArr[i+1] = 0.2; 
-                         colorsArr[i+2] = 0.0;
-                    }
+                    for(let i=0; i<positions.length; i++) positions[i] = originals[i] * sunScale;
+                    for(let i=0; i<colorsArr.length; i+=3) { colorsArr[i] = 1.0; colorsArr[i+1] = 0.2; colorsArr[i+2] = 0.0; }
                     sunBody.geometry.attributes.position.needsUpdate = true;
                     sunBody.geometry.attributes.color.needsUpdate = true;
-
-                    // Check collisions
                     celestialBodies.forEach((body, idx) => {
                         if (idx === 0) return;
                         if (body.userData.distance < sunRadiusCurrent) {
-                            // ENGULFED! Hide particles
                             const opacityArr = body.geometry.attributes.color.array;
-                            for(let k=0; k<opacityArr.length; k++) opacityArr[k] = 0; // Quick hide
+                            for(let k=0; k<opacityArr.length; k++) opacityArr[k] = 0; 
                             body.geometry.attributes.color.needsUpdate = true;
                         }
                     });
-
-                    if (sunRadiusCurrent > 500) { // Max expansion
-                        bbPhase = 'supernova';
-                        bbTime = 0;
-                    }
-
+                    if (sunRadiusCurrent > 500) { bbPhase = 'supernova'; bbTime = 0; }
                 } else if (bbPhase === 'supernova') {
-                    // Phase 2: BOOM
                     celestialBodies.forEach((body, idx) => {
                         const positions = body.geometry.attributes.position.array;
                         const vels = body.userData.bigBangVelocities;
                         const colorsArr = body.geometry.attributes.color.array;
-
-                        // Reset positions to center-ish (where sun was) before blasting
-                        // Since sun was scaling, let's just blast from current positions for sun
-                        // and from center for engulfed planets
-                        
-                        // For simplicity in visual chaos:
-                        // Restore opacity for everyone
-                        // Apply velocity
-                        
                         for(let i=0; i<positions.length; i+=3) {
-                            // If it was hidden (engulfed), move it to near center first
-                            if (idx !== 0 && colorsArr[i] === 0) {
-                                positions[i] = (Math.random()-0.5)*10;
-                                positions[i+1] = (Math.random()-0.5)*10;
-                                positions[i+2] = (Math.random()-0.5)*10;
-                            }
-                            // Set bright white flash
-                            if (bbTime < 0.2) {
-                                colorsArr[i] = 1.0; colorsArr[i+1] = 1.0; colorsArr[i+2] = 1.0;
-                            } else {
-                                // Turn to Nebula colors (Purple/Blue)
-                                colorsArr[i] = 0.5; colorsArr[i+1] = 0.0; colorsArr[i+2] = 0.8;
-                            }
-
-                            positions[i]   += vels[i/3 * 3];
-                            positions[i+1] += vels[i/3 * 3 + 1];
-                            positions[i+2] += vels[i/3 * 3 + 2];
+                            if (idx !== 0 && colorsArr[i] === 0) { positions[i] = (Math.random()-0.5)*10; positions[i+1] = (Math.random()-0.5)*10; positions[i+2] = (Math.random()-0.5)*10; }
+                            if (bbTime < 0.2) { colorsArr[i] = 1.0; colorsArr[i+1] = 1.0; colorsArr[i+2] = 1.0; } 
+                            else { colorsArr[i] = 0.5; colorsArr[i+1] = 0.0; colorsArr[i+2] = 0.8; }
+                            positions[i]   += vels[i/3 * 3]; positions[i+1] += vels[i/3 * 3 + 1]; positions[i+2] += vels[i/3 * 3 + 2];
                         }
                         body.geometry.attributes.position.needsUpdate = true;
                         body.geometry.attributes.color.needsUpdate = true;
                     });
-
-                    if (bbTime > 2.0) {
-                        bbPhase = 'sun_reform';
-                        bbTime = 0;
-                    }
-
+                    if (bbTime > 2.0) { bbPhase = 'sun_reform'; bbTime = 0; }
                 } else if (bbPhase === 'sun_reform') {
-                    // Phase 3: Sun forms, others go to Ring
                     celestialBodies.forEach((body, idx) => {
                         const positions = body.geometry.attributes.position.array;
                         const colorsArr = body.geometry.attributes.color.array;
                         const baseColors = body.userData.baseColors;
-                        
-                        // Current World Position of the Body (Mesh)
-                        // During this whole sequence we paused orbit, so it's static or we should account for it
-                        // To make math easy: We calculate target relative to the mesh position
-                        
-                        const mx = body.position.x;
-                        const my = body.position.y;
-                        const mz = body.position.z;
-
+                        const mx = body.position.x; const my = body.position.y; const mz = body.position.z;
                         for(let i=0; i<positions.length; i+=3) {
                             let tx, ty, tz;
-
                             if (idx === 0) {
-                                // SUN: Go back to original spherical shape
                                 const originals = body.userData.originalPositions;
-                                tx = originals[i]; 
-                                ty = originals[i+1];
-                                tz = originals[i+2];
-                                
-                                // Color back to Gold/Orange
+                                tx = originals[i]; ty = originals[i+1]; tz = originals[i+2];
                                 colorsArr[i] += (baseColors[i] - colorsArr[i]) * 0.05;
                                 colorsArr[i+1] += (baseColors[i+1] - colorsArr[i+1]) * 0.05;
                                 colorsArr[i+2] += (baseColors[i+2] - colorsArr[i+2]) * 0.05;
-
                             } else {
-                                // PLANETS: Go to "Ring"
-                                // Ring position is Global (0,0,0) based.
-                                // Local Target = GlobalTarget - MeshPosition
                                 const ro = body.userData.ringOffset;
-                                const gx = ro[i];
-                                const gy = ro[i+1];
-                                const gz = ro[i+2];
-
-                                tx = gx - mx;
-                                ty = gy - my;
-                                tz = gz - mz;
-
-                                // Color remains Nebula-ish or turns to dust (Grey)
-                                colorsArr[i] += (0.7 - colorsArr[i]) * 0.05;
-                                colorsArr[i+1] += (0.7 - colorsArr[i+1]) * 0.05;
-                                colorsArr[i+2] += (0.7 - colorsArr[i+2]) * 0.05;
+                                const gx = ro[i]; const gy = ro[i+1]; const gz = ro[i+2];
+                                tx = gx - mx; ty = gy - my; tz = gz - mz;
+                                colorsArr[i] += (0.7 - colorsArr[i]) * 0.05; colorsArr[i+1] += (0.7 - colorsArr[i+1]) * 0.05; colorsArr[i+2] += (0.7 - colorsArr[i+2]) * 0.05;
                             }
-
-                            positions[i]   += (tx - positions[i]) * 0.04;
-                            positions[i+1] += (ty - positions[i+1]) * 0.04;
-                            positions[i+2] += (tz - positions[i+2]) * 0.04;
+                            positions[i] += (tx - positions[i]) * 0.04; positions[i+1] += (ty - positions[i+1]) * 0.04; positions[i+2] += (tz - positions[i+2]) * 0.04;
                         }
-                        body.geometry.attributes.position.needsUpdate = true;
-                        body.geometry.attributes.color.needsUpdate = true;
+                        body.geometry.attributes.position.needsUpdate = true; body.geometry.attributes.color.needsUpdate = true;
                     });
-
-                    if (bbTime > 3.0) {
-                        bbPhase = 'planet_reform';
-                        bbTime = 0;
-                        planetReformIndex = 1; // Start with Mercury
-                    }
-
+                    if (bbTime > 3.0) { bbPhase = 'planet_reform'; bbTime = 0; planetReformIndex = 1; }
                 } else if (bbPhase === 'planet_reform') {
-                    // Phase 4: Sequential Reformation
-                    // We keep iterating all bodies to keep Sun and Ring stable
-                    // But we actively lerp the "current" planet back to sphere
-                    
                     let currentPlanetFinished = false;
-
                     celestialBodies.forEach((body, idx) => {
                         const positions = body.geometry.attributes.position.array;
                         const colorsArr = body.geometry.attributes.color.array;
                         const baseColors = body.userData.baseColors;
                         const originals = body.userData.originalPositions;
-
-                        if (idx === 0) {
-                            // Sun Just Twinkles
-                            // ... (optional twinkle logic)
-                        } else if (idx < planetReformIndex) {
-                            // Already formed planets - Stay as sphere
-                             for(let i=0; i<positions.length; i++) {
-                                positions[i] += (originals[i] - positions[i]) * 0.1;
-                             }
-                        } else if (idx === planetReformIndex) {
-                            // CURRENTLY FORMING
+                        if (idx === 0) { } 
+                        else if (idx < planetReformIndex) { for(let i=0; i<positions.length; i++) positions[i] += (originals[i] - positions[i]) * 0.1; } 
+                        else if (idx === planetReformIndex) {
                             let distMax = 0;
                             for(let i=0; i<positions.length; i+=3) {
-                                // Lerp from Ring Pos to Original Sphere Pos
-                                positions[i]   += (originals[i] - positions[i]) * 0.05;
-                                positions[i+1] += (originals[i+1] - positions[i+1]) * 0.05;
-                                positions[i+2] += (originals[i+2] - positions[i+2]) * 0.05;
-                                
-                                // Color back to planet color
-                                colorsArr[i] += (baseColors[i] - colorsArr[i]) * 0.05;
-                                colorsArr[i+1] += (baseColors[i+1] - colorsArr[i+1]) * 0.05;
-                                colorsArr[i+2] += (baseColors[i+2] - colorsArr[i+2]) * 0.05;
-
+                                positions[i] += (originals[i] - positions[i]) * 0.05; positions[i+1] += (originals[i+1] - positions[i+1]) * 0.05; positions[i+2] += (originals[i+2] - positions[i+2]) * 0.05;
+                                colorsArr[i] += (baseColors[i] - colorsArr[i]) * 0.05; colorsArr[i+1] += (baseColors[i+1] - colorsArr[i+1]) * 0.05; colorsArr[i+2] += (baseColors[i+2] - colorsArr[i+2]) * 0.05;
                                 const d = Math.abs(originals[i] - positions[i]);
                                 if (d > distMax) distMax = d;
                             }
                             if (distMax < 1.0) currentPlanetFinished = true;
-
                         } else {
-                            // Still in Ring - Drift slowly
                             const ro = body.userData.ringOffset;
-                            const mx = body.position.x;
-                            const my = body.position.y;
-                            const mz = body.position.z;
-                            
-                            // Rotate ring logic? (Optional)
-                            // Just keep them in place for now
+                            const mx = body.position.x; const my = body.position.y; const mz = body.position.z;
                             for(let i=0; i<positions.length; i+=3) {
-                                const tx = ro[i] - mx;
-                                const ty = ro[i+1] - my;
-                                const tz = ro[i+2] - mz;
-                                positions[i] += (tx - positions[i]) * 0.1;
-                                positions[i+1] += (ty - positions[i+1]) * 0.1;
-                                positions[i+2] += (tz - positions[i+2]) * 0.1;
+                                const tx = ro[i] - mx; const ty = ro[i+1] - my; const tz = ro[i+2] - mz;
+                                positions[i] += (tx - positions[i]) * 0.1; positions[i+1] += (ty - positions[i+1]) * 0.1; positions[i+2] += (tz - positions[i+2]) * 0.1;
                             }
                         }
-                        
-                        body.geometry.attributes.position.needsUpdate = true;
-                        body.geometry.attributes.color.needsUpdate = true;
+                        body.geometry.attributes.position.needsUpdate = true; body.geometry.attributes.color.needsUpdate = true;
                     });
-
-                    if (currentPlanetFinished) {
-                        planetReformIndex++;
-                        if (planetReformIndex >= celestialBodies.length) {
-                            isBigBang = false; // Done!
-                            targetRadius = 600; // Zoom back
-                        }
-                    }
+                    if (currentPlanetFinished) { planetReformIndex++; if (planetReformIndex >= celestialBodies.length) { isBigBang = false; targetRadius = 600; } }
                 }
 
             } else {
                 // --- NORMAL SIMULATION ---
                 celestialBodies.forEach((body, index) => {
                     const data = body.userData;
+                    
+                    // Opacity Transition Logic
+                    if (data.currentOpacity !== data.targetOpacity) {
+                        data.currentOpacity += (data.targetOpacity - data.currentOpacity) * 0.05;
+                    }
+
+                    // Orbital Physics
                     if (data.distance > 0) {
                         data.angle += data.speed * 0.005;
                         body.position.x = Math.cos(data.angle) * data.distance;
@@ -683,40 +658,35 @@
                     }
                     body.rotation.y += 0.005;
 
-                    // Particle State Logic (Individual Planet Destruction)
+                    // Particle State
                     const positions = body.geometry.attributes.position.array;
                     const colorsArr = body.geometry.attributes.color.array;
 
                     if (data.animationState === 'imploding') {
+                        // ... (implosion) ...
                         data.animationTime += 0.016;
                         let distSum = 0;
                         for(let i=0; i<positions.length; i+=3) {
-                            positions[i]   *= 0.9; 
-                            positions[i+1] *= 0.9;
-                            positions[i+2] *= 0.9;
+                            positions[i]   *= 0.9; positions[i+1] *= 0.9; positions[i+2] *= 0.9;
                             distSum += Math.abs(positions[i]) + Math.abs(positions[i+1]) + Math.abs(positions[i+2]);
-                            colorsArr[i] = 1.0; colorsArr[i+1] = 0.9; colorsArr[i+2] = 0.5;
+                            colorsArr[i] = 1.0 * data.currentOpacity; 
+                            colorsArr[i+1] = 0.9 * data.currentOpacity; 
+                            colorsArr[i+2] = 0.5 * data.currentOpacity;
                         }
-                        if (data.animationTime > 0.8 && distSum < 100) {
-                            data.animationState = 'exploding';
-                            data.animationTime = 0;
-                        }
+                        if (data.animationTime > 0.8 && distSum < 100) { data.animationState = 'exploding'; data.animationTime = 0; }
                     } else if (data.animationState === 'exploding') {
                         data.animationTime += 0.016;
                         const vels = data.velocities;
                         for(let i=0; i<positions.length; i++) positions[i] += vels[i];
-                        for(let i=0; i<colorsArr.length; i++) colorsArr[i] = 1.0; 
-                        if (data.animationTime > 1.2) {
-                            data.animationState = 'returning_to_core';
-                            data.animationTime = 0;
-                        }
+                        for(let i=0; i<colorsArr.length; i++) colorsArr[i] = 1.0 * data.currentOpacity; 
+                        if (data.animationTime > 1.2) { data.animationState = 'returning_to_core'; data.animationTime = 0; }
                     } else if (data.animationState === 'returning_to_core') {
                         data.animationTime += 0.016;
                         for(let i=0; i<positions.length; i+=3) {
-                            positions[i]   *= 0.92;
-                            positions[i+1] *= 0.92;
-                            positions[i+2] *= 0.92;
-                            colorsArr[i] = 1.0; colorsArr[i+1] = 0.4 + Math.random() * 0.2; colorsArr[i+2] = 0.1;
+                            positions[i]   *= 0.92; positions[i+1] *= 0.92; positions[i+2] *= 0.92;
+                            colorsArr[i] = 1.0 * data.currentOpacity; 
+                            colorsArr[i+1] = (0.4 + Math.random() * 0.2) * data.currentOpacity; 
+                            colorsArr[i+2] = 0.1 * data.currentOpacity;
                         }
                         if (data.animationTime > 1.5) data.animationState = 'forming_shell';
                     } else if (data.animationState === 'forming_shell') {
@@ -726,22 +696,23 @@
                         for(let i=0; i<positions.length; i++) {
                             const diff = originals[i] - positions[i];
                             positions[i] += diff * 0.05; 
-                            if (i < colorsArr.length) colorsArr[i] += (baseColors[i] - colorsArr[i]) * 0.03;
+                            if (i < colorsArr.length) colorsArr[i] += (baseColors[i] * data.currentOpacity - colorsArr[i]) * 0.03;
                             if (Math.abs(diff) > 0.5) allSettled = false;
                         }
-                        if (allSettled) {
-                            data.animationState = 'idle';
-                            if (index === focusedBodyIndex) targetRadius = Math.max(data.radius * 4, 30);
-                        }
+                        if (allSettled) { data.animationState = 'idle'; if (index === focusedBodyIndex) targetRadius = Math.max(data.radius * 4, 30); }
                     } else {
-                        // Twinkle
+                        // Twinkle & Opacity Application
                         const baseColors = data.baseColors;
                         const twinkles = data.twinkles;
+                        const op = data.currentOpacity;
+                        
+                        // We must apply the opacity multiplier to the base RGB values here
                         for (let i = 0; i < twinkles.length; i++) {
                             const twinkle = 0.8 + 0.7 * Math.sin(time * 3 + twinkles[i]);
-                            colorsArr[i * 3] = baseColors[i * 3] * twinkle;
-                            colorsArr[i * 3 + 1] = baseColors[i * 3 + 1] * twinkle;
-                            colorsArr[i * 3 + 2] = baseColors[i * 3 + 2] * twinkle;
+                            // If op is 0 (hidden), color becomes Black (0,0,0)
+                            colorsArr[i * 3] = baseColors[i * 3] * twinkle * op;
+                            colorsArr[i * 3 + 1] = baseColors[i * 3 + 1] * twinkle * op;
+                            colorsArr[i * 3 + 2] = baseColors[i * 3 + 2] * twinkle * op;
                         }
                     }
                     body.geometry.attributes.position.needsUpdate = true;
