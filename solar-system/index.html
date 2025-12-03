@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Particle Solar System</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent; /* Remove blue highlight on tap */
+        }
+        canvas {
+            display: block;
+            touch-action: none; /* Prevent browser handling of gestures */
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #ffffff;
+            pointer-events: none;
+            text-shadow: 0 0 15px rgba(255, 255, 255, 0.8);
+            z-index: 10;
+        }
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 4px;
+            font-weight: 300;
+        }
+        p {
+            font-size: 0.8rem;
+            opacity: 0.7;
+            margin-top: 5px;
+            letter-spacing: 1px;
+        }
+        .legend {
+            margin-top: 10px;
+            font-size: 0.75rem;
+            opacity: 0.6;
+        }
+
+        /* --- Full Screen Button --- */
+        #fullscreen-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            z-index: 100;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            backdrop-filter: blur(4px);
+            transition: all 0.3s ease;
+        }
+        #fullscreen-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: #00ffff;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.2);
+        }
+
+        /* --- Tooltip --- */
+        #tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.85);
+            color: #00ffff;
+            padding: 8px 12px;
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            border-radius: 4px;
+            pointer-events: none;
+            display: none;
+            font-size: 14px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            z-index: 100;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.2);
+            backdrop-filter: blur(4px);
+            white-space: nowrap;
+        }
+
+        /* --- Navigation Styles --- */
+        #planet-nav {
+            position: absolute;
+            z-index: 20;
+            display: flex;
+            gap: 8px;
+            /* Desktop Defaults */
+            right: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            flex-direction: column;
+        }
+        
+        .nav-btn {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: rgba(255, 255, 255, 0.8);
+            padding: 8px 12px;
+            cursor: pointer;
+            text-align: right;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            backdrop-filter: blur(4px);
+            /* Desktop border logic */
+            border-right: 3px solid transparent;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border-right: 3px solid #00ffff;
+            padding-right: 15px; 
+        }
+
+        .nav-btn.active {
+            background: rgba(0, 255, 255, 0.15);
+            border-color: rgba(0, 255, 255, 0.5);
+            border-right: 3px solid #00ffff;
+            color: #fff;
+            text-shadow: 0 0 8px rgba(0, 255, 255, 0.8);
+        }
+
+        .tooltip-nav {
+            font-size: 0.7rem;
+            color: #aaa;
+            text-align: right;
+            margin-bottom: 5px;
+            font-style: italic;
+        }
+
+        /* --- Mobile Responsive Styles --- */
+        @media (max-width: 768px) {
+            h1 { font-size: 1.2rem; letter-spacing: 2px; }
+            p { font-size: 0.7rem; }
+            .legend { display: none; } /* Hide extra text on mobile */
+            .tooltip-nav { display: none; } /* Hide tooltips on mobile */
+
+            #fullscreen-btn {
+                top: 10px;
+                right: 10px;
+                padding: 6px 10px;
+            }
+
+            #planet-nav {
+                top: auto;
+                bottom: 0;
+                right: 0;
+                left: 0;
+                transform: none;
+                flex-direction: row;
+                overflow-x: auto; /* Horizontal Scroll */
+                padding: 15px 10px;
+                background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+                gap: 12px;
+                /* Hide scrollbar */
+                -ms-overflow-style: none;  /* IE and Edge */
+                scrollbar-width: none;  /* Firefox */
+            }
+            #planet-nav::-webkit-scrollbar {
+                display: none;
+            }
+
+            .nav-btn {
+                flex: 0 0 auto; /* Don't shrink */
+                text-align: center;
+                border-right: 1px solid rgba(255, 255, 255, 0.2);
+                border-bottom: 3px solid transparent;
+                padding: 10px 16px; /* Larger touch target */
+                font-size: 0.9rem;
+            }
+
+            .nav-btn:hover {
+                padding-right: 12px; /* Reset desktop slide effect */
+                border-right: 1px solid rgba(255, 255, 255, 0.2);
+                border-bottom: 3px solid #00ffff;
+            }
+            
+            .nav-btn.active {
+                border-right: 1px solid rgba(255, 255, 255, 0.2);
+                border-bottom: 3px solid #00ffff;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <h1>Particle Solar System</h1>
+        <p>Double-Tap to Focus &bull; Hold to Destroy</p>
+        <div class="legend">Pinch to Zoom</div>
+    </div>
+
+    <button id="fullscreen-btn">⛶ Full Screen</button>
+
+    <!-- Tooltip Element -->
+    <div id="tooltip">Planet Name</div>
+
+    <!-- Navigation Container -->
+    <div id="planet-nav">
+        <div class="tooltip-nav">Double-click: Focus | Right-click: Destroy</div>
+        <!-- Buttons injected here -->
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
+
+        // --- Configuration ---
+        const isMobile = window.innerWidth < 768;
+        // Reduce particle count slightly for mobile performance
+        const pMult = isMobile ? 0.6 : 1.0; 
+
+        const PLANET_CONFIG = [
+            { name: "Sun", radius: 45, distance: 0, speed: 0, colors: [0xffaa00, 0xff4400], particles: Math.floor(4000 * pMult) },
+            { name: "Mercury", radius: 4, distance: 70, speed: 0.8, colors: [0xaaaaaa, 0x8c7c6e], particles: Math.floor(400 * pMult) },
+            { name: "Venus", radius: 8, distance: 95, speed: 0.6, colors: [0xe3bb76, 0xd4a04e], particles: Math.floor(800 * pMult) },
+            { name: "Earth", radius: 9, distance: 130, speed: 0.5, colors: [0x00aaff, 0x22ff44], particles: Math.floor(1000 * pMult) },
+            { name: "Mars", radius: 5, distance: 160, speed: 0.4, colors: [0xff3300, 0xaa2200], particles: Math.floor(600 * pMult) },
+            { name: "Jupiter", radius: 22, distance: 230, speed: 0.2, colors: [0xd9a66c, 0xf2e2b6], particles: Math.floor(2500 * pMult) },
+            { name: "Saturn", radius: 18, distance: 310, speed: 0.15, colors: [0xebd683, 0xcfb55b], particles: Math.floor(2000 * pMult), hasRings: true },
+            { name: "Uranus", radius: 10, distance: 380, speed: 0.1, colors: [0x88ffff, 0x44aaff], particles: Math.floor(900 * pMult) },
+            { name: "Neptune", radius: 10, distance: 440, speed: 0.08, colors: [0x3333ff, 0x111199], particles: Math.floor(900 * pMult) }
+        ];
+
+        // --- Setup Scene ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x020205); 
+        scene.fog = new THREE.FogExp2(0x020205, 0.001);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio for performance
+        document.body.appendChild(renderer.domElement);
+
+        // --- Raycaster ---
+        const raycaster = new THREE.Raycaster();
+        raycaster.params.Points.threshold = 15;
+        const mouse = new THREE.Vector2();
+        const tooltip = document.getElementById('tooltip');
+
+        // --- Texture ---
+        function getSparkleTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 32;
+            canvas.height = 32;
+            const context = canvas.getContext('2d');
+            const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
+            gradient.addColorStop(0.5, 'rgba(128,128,128,0.2)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, 32, 32);
+            return new THREE.Texture(canvas);
+        }
+        const sparkleTexture = getSparkleTexture();
+        sparkleTexture.needsUpdate = true;
+
+        // --- Orbit Line Generator ---
+        function createOrbit(distance) {
+            if (distance <= 0) return;
+            const segmentCount = isMobile ? 64 : 128; // Fewer segments on mobile
+            const points = [];
+            for (let i = 0; i <= segmentCount; i++) {
+                const theta = (i / segmentCount) * Math.PI * 2;
+                points.push(Math.cos(theta) * distance, 0, Math.sin(theta) * distance);
+            }
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+            const material = new THREE.LineBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.1,
+                blending: THREE.AdditiveBlending
+            });
+            const orbit = new THREE.Line(geometry, material);
+            scene.add(orbit);
+        }
+
+        // --- Celestial Body Generator ---
+        const celestialBodies = []; 
+
+        function createCelestialBody(config) {
+            const geometry = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+            const sizes = [];
+            const twinkles = [];
+            
+            const color1 = new THREE.Color(config.colors[0]);
+            const color2 = new THREE.Color(config.colors[1]);
+
+            for (let i = 0; i < config.particles; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+                const r = config.radius * (0.95 + Math.random() * 0.1); 
+                positions.push(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+                const mixedColor = color1.clone().lerp(color2, Math.random());
+                colors.push(mixedColor.r, mixedColor.g, mixedColor.b);
+                sizes.push((isMobile ? 6 : 4) + Math.random() * 3); // Slightly larger on mobile for visibility
+                twinkles.push(Math.random() * 100);
+            }
+
+            if (config.hasRings) {
+                const ringParticles = Math.floor(1500 * pMult);
+                const ringInner = config.radius * 1.4;
+                const ringOuter = config.radius * 2.5;
+                const ringColor = new THREE.Color(0xcfb55b);
+                for (let i = 0; i < ringParticles; i++) {
+                    const theta = Math.random() * Math.PI * 2;
+                    const r = ringInner + Math.random() * (ringOuter - ringInner);
+                    positions.push(r * Math.cos(theta), (Math.random() - 0.5), r * Math.sin(theta));
+                    colors.push(ringColor.r, ringColor.g, ringColor.b);
+                    sizes.push(2);
+                    twinkles.push(Math.random() * 100);
+                }
+            }
+
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+
+            const material = new THREE.PointsMaterial({
+                size: 4,
+                map: sparkleTexture,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                transparent: true,
+                opacity: 0.9
+            });
+
+            const mesh = new THREE.Points(geometry, material);
+            const angle = Math.random() * Math.PI * 2;
+            
+            mesh.userData = {
+                id: celestialBodies.length,
+                name: config.name,
+                distance: config.distance,
+                speed: config.speed,
+                angle: angle,
+                twinkles: twinkles,
+                baseColors: [...colors],
+                originalPositions: [...positions], 
+                animationState: 'idle', 
+                explosionTime: 0,
+                velocities: [], 
+                bigBangVelocities: [],
+                ringOffset: [], 
+                radius: config.radius,
+                isSun: config.distance === 0,
+                targetOpacity: 1.0,
+                currentOpacity: 1.0
+            };
+
+            mesh.position.x = Math.cos(angle) * config.distance;
+            mesh.position.z = Math.sin(angle) * config.distance;
+
+            if (config.hasRings) {
+                mesh.rotation.z = Math.PI / 6;
+                mesh.rotation.x = Math.PI / 8;
+            }
+
+            scene.add(mesh);
+            celestialBodies.push(mesh);
+        }
+
+        PLANET_CONFIG.forEach(config => {
+            createCelestialBody(config);
+            createOrbit(config.distance);
+        });
+
+        // --- Interaction & Camera ---
+        const cameraPivot = new THREE.Object3D();
+        scene.add(cameraPivot);
+        cameraPivot.add(camera);
+
+        // State Vars
+        let camRadius = 600;
+        let targetRadius = 600;
+        let camTheta = Math.PI / 4; 
+        let camPhi = Math.PI / 2;   
+        let focusedBodyIndex = -1;
+
+        let isBigBang = false;
+        let bbPhase = 'idle';
+        let bbTime = 0;
+        let sunScale = 1;
+        let planetReformIndex = 1;
+
+        let hoverStartTime = 0;
+        let hoveredIndex = -1;
+        let isLongHover = false;
+        let isDeepFocus = false;
+        const LONG_HOVER_THRESHOLD = 1000;
+
+        // --- Logic Functions ---
+        
+        function focusOnBody(index, btnElement) {
+            focusedBodyIndex = index;
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            if(btnElement) btnElement.classList.add('active');
+            celestialBodies.forEach(b => b.userData.targetOpacity = 1.0);
+
+            if (index === -1) {
+                targetRadius = 600;
+                isDeepFocus = false;
+                isLongHover = false;
+            } else {
+                if (isDeepFocus || isLongHover) {
+                    const planetRadius = PLANET_CONFIG[index].radius;
+                    targetRadius = planetRadius * 3.5; 
+                    celestialBodies.forEach((b, idx) => {
+                        if (idx !== index) b.userData.targetOpacity = 0.05; 
+                    });
+                } else {
+                    const planetRadius = PLANET_CONFIG[index].radius;
+                    targetRadius = Math.max(planetRadius * 4, 30);
+                }
+            }
+        }
+
+        function explodeAndRebuild(index, btnElement) {
+            if (index === -1 || isBigBang) return; 
+            isDeepFocus = false;
+            focusOnBody(index, btnElement);
+            const planetRadius = PLANET_CONFIG[index].radius;
+            targetRadius = Math.max(planetRadius * 10, 80); 
+            const body = celestialBodies[index];
+            if (body.userData.animationState !== 'idle') return; 
+            body.userData.animationState = 'imploding';
+            body.userData.animationTime = 0;
+            body.userData.velocities = [];
+            const count = body.geometry.attributes.position.count;
+            for(let i=0; i<count; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+                const speed = 2 + Math.random() * 10; 
+                const vx = speed * Math.sin(phi) * Math.cos(theta);
+                const vy = speed * Math.sin(phi) * Math.sin(theta);
+                const vz = speed * Math.cos(phi);
+                body.userData.velocities.push(vx, vy, vz);
+            }
+        }
+
+        function triggerBigBang() {
+            if (isBigBang) return;
+            isBigBang = true;
+            bbPhase = 'expansion';
+            bbTime = 0;
+            sunScale = 1;
+            planetReformIndex = 1;
+            focusOnBody(-1, overviewBtn);
+            targetRadius = 950; 
+            celestialBodies.forEach(body => {
+                body.userData.animationState = 'idle';
+                body.userData.targetOpacity = 1.0; 
+                body.userData.ringOffset = [];
+                const count = body.geometry.attributes.position.count;
+                for(let i=0; i<count; i++) {
+                    const r = 100 + Math.random() * 300; 
+                    const theta = Math.random() * Math.PI * 2;
+                    const y = (Math.random() - 0.5) * 10; 
+                    body.userData.ringOffset.push(r * Math.cos(theta), y, r * Math.sin(theta));
+                }
+                body.userData.bigBangVelocities = [];
+                for(let i=0; i<count; i++) {
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos((Math.random() * 2) - 1);
+                    const speed = 10 + Math.random() * 40; 
+                    const vx = speed * Math.sin(phi) * Math.cos(theta);
+                    const vy = speed * Math.sin(phi) * Math.sin(theta);
+                    const vz = speed * Math.cos(phi);
+                    body.userData.bigBangVelocities.push(vx, vy, vz);
+                }
+            });
+        }
+
+        // --- UI Generation ---
+        const navContainer = document.getElementById('planet-nav');
+        
+        const overviewBtn = document.createElement('button');
+        overviewBtn.className = 'nav-btn active';
+        overviewBtn.innerText = 'Overview';
+        overviewBtn.onclick = () => { isDeepFocus = false; focusOnBody(-1, overviewBtn); };
+        overviewBtn.ondblclick = () => triggerBigBang();
+        navContainer.appendChild(overviewBtn);
+
+        PLANET_CONFIG.forEach((planet, index) => {
+            const btn = document.createElement('button');
+            btn.className = 'nav-btn';
+            btn.innerText = planet.name;
+            btn.id = `btn-${index}`;
+            // Mouse Events
+            btn.onclick = () => { isDeepFocus = false; focusOnBody(index, btn); };
+            btn.ondblclick = () => { isDeepFocus = 
